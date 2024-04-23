@@ -104,8 +104,6 @@ class Markup1API(API):
         expected = re.sub(clean_it, "", expected).strip()
         expected = expected.replace("^", "")
         result = process.stdout.decode("utf8").strip()
-        print("Expected : ", expected)
-        print("Result : ", result)
         if result == expected:
             return TestResult.PASSING, f"Expected {expected}"
         else:
@@ -125,8 +123,6 @@ class Markup2API(API):
         expected = re.sub(clean_it2, "", expected).strip()
         result = process.stdout.decode("utf8").strip()
         expected = expected.replace("^", "")
-        print("Expected : ", expected)
-        print("Result : ", result)
         if result == expected:
             return TestResult.PASSING, f"Expected {expected}"
         else:
