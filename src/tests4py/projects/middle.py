@@ -235,17 +235,15 @@ class MiddleSystemtestGenerator(SystemtestGenerator, MiddleTestGenerator):
         return f"{x}\n{y}\n{z}", TestResult.PASSING
 
 
-grammar: Grammar = clean_up(
-    dict(
-        CLI_GRAMMAR,
-        **{
-            "<start>": ["<arg> <arg> <arg>"],
-            "<escaped>": ["<integer>"],
-            "<unescaped>": ["<integer>"],
-        },
-        **INTEGER,
-    )
-)
+grammar: Grammar = {
+    "<start>": ["<x> <y> <z>"],
+    "<x>": ["<integer>"],
+    "<y>": ["<integer>"],
+    "<z>": ["<integer>"],
+    "<integer>": ["<integer_>", "-<integer_>"],
+    "<integer_>": ["<digit>", "<digit><integer_>"],
+    "<digit>": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+}
 
 
 assert is_valid_grammar(grammar)
