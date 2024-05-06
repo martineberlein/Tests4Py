@@ -10,7 +10,6 @@ from typing import List, Optional, Tuple, Any, Callable
 
 from tests4py.constants import PYTHON
 from tests4py.grammars import python
-from tests4py.grammars.default import clean_up, get_string_rule
 from tests4py.grammars.fuzzer import Grammar
 from tests4py.grammars.fuzzer import is_valid_grammar
 from tests4py.grammars.fuzzer import srange
@@ -73,7 +72,7 @@ def register():
         test_cases=[os.path.join("tests", "test_markup.py") + "::test_quoted_abc"],
         unittests=MarkupUnittestGenerator(),
         systemtests=MarkupSystemtestGenerator(),
-        api=MarkupAPI(),
+        api=Markup1API(),
     )
     Markup(
         bug_id=2,
@@ -88,25 +87,42 @@ def register():
         ],
         unittests=MarkupUnittestGenerator(),
         systemtests=MarkupSystemtestGenerator(),
-        api=MarkupAPI(),
+        api=Markup2API(),
     )
 
 
-class MarkupAPI(API):
+class Markup1API(API):
     def __init__(self, default_timeout=5):
         super().__init__(default_timeout=default_timeout)
-        self.pattern = re.compile("<[^<>]*>")
-
-    def get_test_arguments_from_string(self, s: str) -> List[str]:
-        return [s]
 
     def oracle(self, args: Any) -> Tuple[TestResult, str]:
         if args is None:
             return TestResult.UNDEFINED, "No process finished"
         process: subprocess.CompletedProcess = args
-        expected = re.sub(self.pattern, "", process.args[2]).strip()
+        expected = process.args[2]
+        clean_it = re.compile("<.*?>")
+        expected = re.sub(clean_it, "", expected).strip()
         expected = expected.replace("^", "")
         result = process.stdout.decode("utf8").strip()
+        if result == expected:
+            return TestResult.PASSING, f"Expected {expected}"
+        else:
+            return TestResult.FAILING, f"Expected {expected}, but was {result}"
+
+
+class Markup2API(API):
+    def __init__(self, default_timeout=5):
+        super().__init__(default_timeout=default_timeout)
+
+    def oracle(self, args: Any) -> Tuple[TestResult, str]:
+        if args is None:
+            return TestResult.UNDEFINED, "No process finished"
+        process: subprocess.CompletedProcess = args
+        expected = process.args[2]
+        clean_it2 = re.compile("<.*?>")
+        expected = re.sub(clean_it2, "", expected).strip()
+        result = process.stdout.decode("utf8").strip()
+        expected = expected.replace("^", "")
         if result == expected:
             return TestResult.PASSING, f"Expected {expected}"
         else:
@@ -202,27 +218,20 @@ class MarkupSystemtestGenerator(SystemtestGenerator, MarkupTestGenerator):
         return f"{prospects[0]}", TestResult.PASSING
 
 
-grammar: Grammar = clean_up(
-    dict(
-        **{
-            "<start>": ["<structure>"],
-            "<structure>": [
-                "<string>",
-                "<html><structure>",
-                "<string><html><structure>",
-            ],
-            "<html>": ["<open><structure><close>"],
-            "<open>": ["<LPAR><string><RPAR>"],
-            "<close>": ["<LPAR>/<string><RPAR>"],
-            "<LPAR>": ["<"],
-            "<RPAR>": [">"],
-            "<identifier>": ["<id_char><id_chars>"],
-            "<id_char>": srange(string.ascii_letters),
-            "<id_chars>": ["", "<id_char_follow><id_chars>"],
-            "<id_char_follow>": srange(string.ascii_letters + string.digits + "_"),
-        },
-        **get_string_rule(srange(string.printable.replace("<", "").replace(">", ""))),
-    )
-)
+grammar: Grammar = {
+    "<start>": ["<structure_>"],
+    "<structure_>": [
+        "<keys_>",
+        "<html_><keys_><html_>",
+        "<html_><keys_><html_><keys_><html_><keys_><html_>",
+    ],
+    "<html_>": ["<quotations_><tag_><quotations_>"],
+    "<tag_>": ["<key_><digit_>", "<keys_>"],
+    "<quotations_>": ["<quotation_><quotations_>", "<quotation_>"],
+    "<quotation_>": srange(string.punctuation),
+    "<digit_>": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    "<keys_>": ["<key_><keys_>", "key_", " ", ""],
+    "<key_>": srange(string.ascii_letters),
+}
 
 assert is_valid_grammar(grammar)
