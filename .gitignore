@@ -155,9 +155,4 @@ tmp.py
 *.DS_Store
 out.xml
 sflkit_events
-notebooks/tmp/*
-notebooks/tmp
-mappings/
-report_*.json
-results_*.txt
-
+tmp.json

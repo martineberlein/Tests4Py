@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import List
 
 # noinspection PyUnresolvedReferences,PyPackageRequirements
-from fastapi import APIRouter, Depends, FastAPI, Form
+from fastapi import APIRouter, Depends, FastAPI, Form, Body
 
 # noinspection PyUnresolvedReferences,PyPackageRequirements
 from fastapi.routing import APIRoute
@@ -98,6 +98,32 @@ if __name__ == "__main__":
         nargs=2,
         metavar=("url", "response"),
     )
+    arguments.add_argument(
+        "-pas",
+        dest="parameters",
+        action="append",
+        default=[],
+        nargs=3,
+        metavar=("url", "parameter", "depends"),
+    )
+    arguments.add_argument(
+        "-r",
+        dest="route",
+        nargs=3,
+        metavar=("url", "default", "value"),
+        default=(None, "default", "value"),
+    )
+    arguments.add_argument(
+        "-mt",
+        dest="media_type",
+        default=None,
+    )
+    arguments.add_argument(
+        "-e",
+        dest="embed",
+        default=False,
+        action="store_true",
+    )
 
     args = arguments.parse_args()
 
@@ -135,6 +161,10 @@ if __name__ == "__main__":
             ids: List[int] = None
             age: condecimal(gt=Decimal(0.0))
 
+    class ItemLower(BaseModel):
+        name: str = ...
+        age: condecimal(lt=Decimal(90.0))
+
     item_name, item_price, item_age = args.item
 
     def get_item():
@@ -146,7 +176,18 @@ if __name__ == "__main__":
             }
         )
 
+    def get_item_lower():
+        return ItemLower(
+            **{
+                "name": item_name,
+                "age": int(item_age),
+            }
+        )
+
     def save_item_no_body(item: Item):
+        return {"item": item}
+
+    def save_item_lower(item: ItemLower):
         return {"item": item}
 
     def get_item_list():
@@ -166,6 +207,24 @@ if __name__ == "__main__":
                 }
             ),
         ]
+
+    def get_item_dict():
+        return {
+            "1": Item(
+                **{
+                    args.alias or "name": item_name,
+                    "price": float(item_price),
+                    "age": int(item_age),
+                }
+            ),
+            "2": Item(
+                **{
+                    args.alias or "name": item_name,
+                    "price": float(item_price),
+                    "age": int(item_age),
+                }
+            ),
+        }
 
     if field_exists:
 
@@ -213,9 +272,9 @@ if __name__ == "__main__":
     class ModelB(BaseModel):
         username: str
 
-    b_username = args.model_b
+    b_username = args.model_b[0]
 
-    async def get_model_b() -> ModelB:
+    def get_model_b() -> ModelB:
         return ModelB(username=b_username)
 
     class ModelA(ModelB):
@@ -223,25 +282,26 @@ if __name__ == "__main__":
 
     a_username, a_password = args.model_a
 
-    async def get_model_a() -> ModelA:
-        return ModelA(username=a_username, passord=a_password)
+    def get_model_a() -> ModelA:
+        return ModelA(username=a_username, password=a_password)
 
     class ModelC(BaseModel):
         id_: int
         model_b: ModelB
 
-    async def get_model_c_a(model_a=Depends(get_model_a)):
-        return {"id_": 0, "model_b": model_a}
-
-    async def get_model_c_b(model_b=Depends(get_model_b)):
+    def get_model_c(model_b):
         return {"id_": 0, "model_b": model_b}
 
     for url, response in args.gets:
         responder = None
+        depender = None
         type_ = None
         if response == "Item":
             responder = get_item
             type_ = Item
+        elif response == "ItemLower":
+            responder = get_item_lower
+            type_ = ItemLower
         elif response == "List[Item]":
             responder = get_item_list
             type_ = List[Item]
@@ -251,32 +311,46 @@ if __name__ == "__main__":
         elif response == "List[OtherIterm]":
             responder = get_other_list
             type_ = List[OtherItem]
-        elif responder == "ModelA":
+        elif response == "ModelA":
             responder = get_model_a
             type_ = ModelA
-        elif responder == "ModelB":
+        elif response == "ModelB":
             responder = get_model_b
             type_ = ModelB
-        elif responder == "ModelCA":
-            responder = get_model_c_a
+        elif response == "ModelCA":
+            responder = get_model_c
+            depender = get_model_a
             type_ = ModelC
-        elif responder == "ModelCB":
-            responder = get_model_c_b
+        elif response == "ModelCB":
+            responder = get_model_c
+            depender = get_model_b
             type_ = ModelC
 
         if responder is not None:
+            if depender is None:
 
-            @app.get(url, response_model=type_)
-            def get():
-                return responder()
+                @app.get(url, response_model=type_)
+                def get():
+                    return responder()
+
+            else:
+
+                @app.get(url, response_model=type_)
+                def get(m=Depends(depender)):
+                    return responder(m)
 
     for url, response in args.posts:
         responder = None
+        depender = None
         type_ = None
         no_response = False
         if response == "Item":
             responder = save_item_no_body
             type_ = Item
+            no_response = True
+        elif response == "ItemLower":
+            responder = save_item_lower
+            type_ = ItemLower
             no_response = True
         elif response == "List[Item]":
             responder = get_item_list
@@ -287,31 +361,106 @@ if __name__ == "__main__":
         elif response == "List[OtherIterm]":
             responder = get_other_list
             type_ = List[OtherItem]
-        elif responder == "ModelA":
+        elif response == "ModelA":
             responder = get_model_a
             type_ = ModelA
-        elif responder == "ModelB":
+        elif response == "ModelB":
             responder = get_model_b
             type_ = ModelB
-        elif responder == "ModelCA":
-            responder = get_model_c_a
+        elif response == "ModelCA":
+            responder = get_model_c
+            depender = get_model_a
             type_ = ModelC
-        elif responder == "ModelCB":
-            responder = get_model_c_b
+        elif response == "ModelCB":
+            responder = get_model_c
+            depender = get_model_b
             type_ = ModelC
+        elif response == "FormList":
+
+            @app.post(url)
+            def form_from_list(items: list = Form(...)):
+                return items
+
+            continue
+        elif response == "FormSet":
+
+            @app.post(url)
+            def form_from_list(items: set = Form(...)):
+                return items
+
+            continue
+        elif response == "FormTuple":
+
+            @app.post(url)
+            def form_from_list(items: tuple = Form(...)):
+                return items
+
+            continue
+
+        elif response.startswith("FormInt"):
+            default = int(response.split("[")[1][:-1])
+
+            @app.post(url)
+            def from_from_int(items: int = Form(default)):
+                return items
 
         if responder is not None:
             if no_response:
+                if args.media_type is None and not args.embed:
 
-                @app.post(url)
-                def post(m: type_):
-                    return responder(m)
+                    @app.post(url)
+                    def post(m: type_):
+                        return responder(m)
+
+                elif args.media_type is None and args.embed:
+
+                    @app.post(url)
+                    def post(m: type_ = Body(..., embed=True)):
+                        return responder(m)
+
+                elif args.media_type is not None and not args.embed:
+
+                    @app.post(url)
+                    def post(m: type_ = Body(..., media_type=args.media_type)):
+                        return responder(m)
+
+                else:
+
+                    @app.post(url)
+                    def post(
+                        m: type_ = Body(..., media_type=args.media_type, embed=True)
+                    ):
+                        return responder(m)
 
             else:
+                if depender is None:
 
-                @app.post(url, response_model=type_)
-                def post():
-                    return responder()
+                    @app.post(url, response_model=type_)
+                    def post():
+                        return responder()
+
+                else:
+
+                    @app.post(url, response_model=type_)
+                    def post(m=Depends(depender)):
+                        return responder(m)
+
+    for url, parameter, depends in args.parameters:
+
+        async def exists(value: int):
+            return True
+
+        if int(depends):
+
+            @app.get(f"{url}/{parameter}", dependencies=[Depends(exists)])
+            async def get(value: int):
+                pass
+
+        else:
+
+            @app.get(f"{url}/{parameter}")
+            async def get(value: int):
+                pass
 
     for url, dep in args.websockets:
 
@@ -320,6 +469,27 @@ if __name__ == "__main__":
             await websocket.accept()
             await websocket.send_text(data)
             await websocket.close()
+
+    url, default, value = args.route
+
+    class CustomRoute(APIRoute):
+        value = value
+
+    try:
+        custom_router = APIRouter(route_class=CustomRoute)
+    except TypeError:
+        custom_router = APIRouter()
+
+    @custom_router.get("/")
+    def get_value():
+        return {"value": custom_router.value}
+
+    @custom_router.get(f"/{default}")
+    def get_value():
+        return {"value": value}
+
+    if url is not None:
+        app.include_router(custom_router, prefix=url)
 
     client = TestClient(app)
 

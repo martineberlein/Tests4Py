@@ -291,8 +291,8 @@ def register():
             Path("tests", "test_union_inherited_body.py"),
         ],
         api=FastAPI9API(),
-        # systemtests=FastAPI9SystemtestGenerator(),
-        # unittests=FastAPI9UnittestGenerator(),
+        systemtests=FastAPI9SystemtestGenerator(),
+        unittests=FastAPI9UnittestGenerator(),
         loc=3625,
     )
     FastAPI(
@@ -451,11 +451,14 @@ class FastAPIDefaultAPI(API, GrammarVisitor):
         self.gets = dict()
         self.posts = dict()
         self.dependencies = []
+        self.routes = dict()
         self.overrides = dict()
         self.url = None
         self.mode = None
         self.data = None
         self.aliased = False
+        self.media_type = None
+        self.embed = False
 
     def visit_options(self, node: ComplexDerivationTree):
         self.websockets = dict()
@@ -463,11 +466,14 @@ class FastAPIDefaultAPI(API, GrammarVisitor):
         self.posts = dict()
         self.websockets = dict()
         self.dependencies = []
+        self.routes = dict()
         self.overrides = dict()
         self.url = None
         self.mode = None
         self.data = None
         self.aliased = None
+        self.media_type = None
+        self.embed = False
         self.generic_visit(node)
 
     def prepare_args(self, args: List[str], work_dir: Path) -> List[str]:
@@ -531,6 +537,18 @@ class FastAPIDefaultAPI(API, GrammarVisitor):
         filtered = self._filter(node)
         self.aliased = self.visit(filtered[1])
 
+    def visit_route(self, node: ComplexDerivationTree):
+        filtered = self._filter(node)
+        self.routes[self.visit(filtered[1])] = self.visit(filtered[3])
+
+    def visit_media_type(self, node: ComplexDerivationTree):
+        filtered = self._filter(node)
+        self.media_type = self.visit(filtered[1])
+
+    # noinspection PyUnusedLocal
+    def visit_embed(self, node: ComplexDerivationTree):
+        self.embed = True
+
     def condition(self, process: subprocess.CompletedProcess) -> bool:
         return False
 
@@ -554,8 +572,6 @@ class FastAPIDefaultAPI(API, GrammarVisitor):
 
     def oracle(self, args) -> Tuple[TestResult, str]:
         process = args
-        if not self.parsed:
-            return TestResult.UNDEFINED, "Cannot parse argument"
         if self.condition(process) and self.contains(process):
             return TestResult.FAILING, self.get_failing_feedback()
         else:
@@ -614,7 +630,7 @@ class FastAPI3API(FastAPIDefaultAPI):
 
 class FastAPI4API(FastAPIDefaultAPI):
     def condition(self, process: subprocess.CompletedProcess) -> bool:
-        return process.returncode in (0, 200) and self.path == "/openapi.json"
+        return process.returncode in (0, 200) and self.url == "/openapi.json"
 
     def contains(self, process: subprocess.CompletedProcess) -> bool:
         response = eval(process.stdout.decode("utf-8"))
@@ -642,11 +658,8 @@ class FastAPI5API(FastAPIDefaultAPI):
         return process.returncode == 0 or process.returncode == 200
 
     def contains(self, process: subprocess.CompletedProcess) -> bool:
-        return (
-            b'"password"' in process.stdout
-            or b'"test-password"' in process.stdout
-            or b"'password'" in process.stdout
-            or b"'test-password'" in process.stdout
+        return (b'"id_"' in process.stdout or b"'id_'" in process.stdout) and (
+            b'"password"' in process.stdout or b"'password'" in process.stdout
         )
 
 
@@ -664,8 +677,8 @@ class FastAPI7API(FastAPIDefaultAPI):
 
     def contains(self, process: subprocess.CompletedProcess) -> bool:
         return (
-            b"TypeError: Object of type Decimal is not JSON serializable"
-            in process.stderr
+            b"TypeError" in process.stderr
+            and b" is not JSON serializable" in process.stderr
         )
 
     def error_handling(self, process: subprocess.CompletedProcess) -> bool:
@@ -682,20 +695,38 @@ class FastAPI7API(FastAPIDefaultAPI):
 class FastAPI8API(FastAPIDefaultAPI):
     def condition(self, process: subprocess.CompletedProcess) -> bool:
         return (
-            self.path == "/routes/"
+            any(f"{url}/".startswith(self.url) for url in self.routes)
             and process.returncode != 0
             and process.returncode != 200
         )
 
     def contains(self, process: subprocess.CompletedProcess) -> bool:
         return (
-            b"AttributeError: 'APIRoute' object has no attribute 'x_type'"
+            b"AttributeError: 'APIRouter' object has no attribute 'value'"
             in process.stderr
         )
 
+    def fallback_condition(self, process: subprocess.CompletedProcess) -> bool:
+        return self.condition(process)
+
+    def fallback_contains(self, process: subprocess.CompletedProcess) -> bool:
+        url = filter(lambda u: f"{u}/".startswith(self.url), self.routes)[0]
+        return self.routes[url].encode("utf8") not in process.stdout
+
 
 class FastAPI9API(FastAPIDefaultAPI):
-    pass
+    def condition(self, process: subprocess.CompletedProcess) -> bool:
+        return (
+            process.returncode == 200
+            and self.url == "/openapi.json"
+            and self.embed
+            and self.media_type is not None
+            and self.media_type != "application/json"
+            and any(self.posts[u] in ["Item", "ItemLower"] for u in self.posts)
+        )
+
+    def contains(self, process: subprocess.CompletedProcess) -> bool:
+        return self.media_type.encode("utf8") not in process.stdout
 
 
 class FastAPI10API(FastAPIDefaultAPI):
@@ -1350,7 +1381,11 @@ grammar_request: Grammar = clean_up(
                 "-<model_b>",
                 "-<get>",
                 "-<post>",
+                "-<param>",
                 "-<alias>",
+                "-<route>",
+                "-<media_type>",
+                "-<embed>",
             ],
             # OPTIONS
             "<websocket>": get_possible_options("ws", "<arg><sep><arg>"),
@@ -1359,12 +1394,20 @@ grammar_request: Grammar = clean_up(
             "<url>": get_possible_options("u", "<arg>"),
             "<data>": get_possible_options("d", "<json>"),
             "<mode>": get_possible_options("m", "<r_mode>"),
-            "<item>": get_possible_options("item", "<arg><sep><float><sep><integer>"),
+            "<item>": get_possible_options(
+                "item", "<arg><sep><arg_float><sep><arg_integer>"
+            ),
             "<model_a>": get_possible_options("ma", "<arg><sep><arg>"),
             "<model_b>": get_possible_options("mb", "<arg>"),
             "<get>": get_possible_options("gs", "<arg><sep><model>"),
             "<post>": get_possible_options("ps", "<arg><sep><model>"),
+            "<param>": get_possible_options(
+                "pas", "<arg><sep><parameter><sep><arg_integer>"
+            ),
             "<alias>": get_possible_options("a", "<arg>"),
+            "<route>": get_possible_options("r", "<arg><sep><arg><sep><arg>"),
+            "<media_type>": get_possible_options("mt", "<arg>"),
+            "<embed>": ["e"],
             # UTILS
             "<r_mode>": ["get", "post", "websocket"],
             "<json>": ["<json_>", '"<json_>"', "'<json_>'"],
@@ -1375,8 +1418,14 @@ grammar_request: Grammar = clean_up(
             "<json_list>": ["[]", "[<json_values>]"],
             "<json_values>": ["<json_value>", "<json_values>,<json_value>"],
             "<json_value>": ["<float>", "<json_str>", "<json_object>", "<json_list>"],
+            "<parameter>": ["{<chars>}"],
             "<key>": ["<json_str>"],
-            "<json_str>": ['\\"\\"', '\\"<chars>\\"', '""', '"<chars>"'],
+            "<json_str>": [
+                '\\"\\"',
+                '\\"<chars>\\"',
+                '""',
+                '"<chars>"',
+            ],
             "<chars>": ["<char>", "<chars><char>"],
             "<char>": srange(string.ascii_letters + string.digits + "_"),
             "<model>": [
@@ -1385,10 +1434,17 @@ grammar_request: Grammar = clean_up(
                 "ModelCA",
                 "ModelCB",
                 "Item",
+                "ItemLower",
                 "OtherItem",
                 "List[Item]",
                 "List[OtherItem]",
+                "FormList",
+                "FormTuple",
+                "FormSet",
+                "FormInt[<integer>]",
             ],
+            "<arg_integer>": ["<integer>", "'<integer>'", '"<integer>"'],
+            "<arg_float>": ["<float>", "'<float>'", '"<float>"'],
         },
         **FLOAT,
     )
@@ -1416,7 +1472,11 @@ grammar_request_generic: Grammar = clean_up(
                 "-<model_b>",
                 "-<get>",
                 "-<post>",
+                "-<param>",
                 "-<alias>",
+                "-<route>",
+                "-<media_type>",
+                "-<embed>",
             ],
             # OPTIONS
             "<websocket>": get_possible_options("ws", "<arg><sep><arg>"),
@@ -1430,7 +1490,11 @@ grammar_request_generic: Grammar = clean_up(
             "<model_b>": get_possible_options("mb", "<arg>"),
             "<get>": get_possible_options("gs", "<arg><sep><arg>"),
             "<post>": get_possible_options("ps", "<arg><sep><arg>"),
+            "<param>": get_possible_options("pas", "<arg><sep><arg><sep><arg>"),
             "<alias>": get_possible_options("a", "<arg>"),
+            "<route>": get_possible_options("r", "<arg><sep><arg><sep><arg>"),
+            "<media_type>": get_possible_options("mt", "<arg>"),
+            "<embed>": ["e"],
         },
         **FLOAT,
     )
